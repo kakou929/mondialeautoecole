@@ -1,9 +1,9 @@
 import './firebase';
 import { auth, db } from './firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, getDocs, increment } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, getDocs, increment, deleteDoc } from 'firebase/firestore';
 import { useState, useEffect } from 'react';
-import { Award, Trophy, ArrowLeft, User, LogOut, CreditCard, FileText, Users, Send, BarChart3 } from 'lucide-react';
+import { Award, Trophy, ArrowLeft, User, LogOut, CreditCard, FileText, Users, Send, BarChart3, Calendar, Clock, CheckCircle, XCircle } from 'lucide-react';
 import './App.css';
 import femmeVolant from './assets/femme-volant.jpg';
 
@@ -29,6 +29,20 @@ function App() {
   const [showMessageModal, setShowMessageModal] = useState(false);
   const [selectedUserForMessage, setSelectedUserForMessage] = useState(null);
   const [messageText, setMessageText] = useState('');
+  
+  // NOUVEAUX ÉTATS ADMIN
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
+  const [adminCode, setAdminCode] = useState('');
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const ADMIN_SECRET_CODE = 'MONDIALE2024'; // Code administrateur secret
+  
+  // ÉTATS RÉSERVATION
+  const [showReservationModal, setShowReservationModal] = useState(false);
+  const [reservationDate, setReservationDate] = useState('');
+  const [reservationTime, setReservationTime] = useState('');
+  const [reservations, setReservations] = useState([]);
+  const [allReservations, setAllReservations] = useState([]);
+  
   const [panneaux] = useState([
     // PANNEAUX GRATUITS (10)
     { id: 1, nom: "Virage dangereux à droite", categorie: "danger", fichier: "./assets/img01.jpg", gratuit: true },
@@ -447,6 +461,8 @@ function App() {
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         if (userDoc.exists()) {
           setUserData(userDoc.data());
+          // Charger les réservations de l'utilisateur
+          await loadUserReservations(user.uid);
         }
         setCurrentPage('home');
       } else {
@@ -468,6 +484,34 @@ function App() {
       setAllUsers(usersData);
     } catch (error) {
       console.error('Erreur chargement utilisateurs:', error);
+    }
+  };
+
+  const loadUserReservations = async (userId) => {
+    try {
+      const reservationsSnapshot = await getDocs(collection(db, 'reservations'));
+      const userReservations = reservationsSnapshot.docs
+        .map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }))
+        .filter(res => res.userId === userId);
+      setReservations(userReservations);
+    } catch (error) {
+      console.error('Erreur chargement réservations:', error);
+    }
+  };
+
+  const loadAllReservations = async () => {
+    try {
+      const reservationsSnapshot = await getDocs(collection(db, 'reservations'));
+      const allRes = reservationsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setAllReservations(allRes);
+    } catch (error) {
+      console.error('Erreur chargement réservations:', error);
     }
   };
 
@@ -598,10 +642,23 @@ function App() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
+      setIsAdminAuthenticated(false);
       setCurrentPage('welcome');
       alert('✅ Déconnexion réussie');
     } catch (error) {
       console.error('Erreur déconnexion:', error);
+    }
+  };
+
+  const handleAdminLogin = () => {
+    if (adminCode === ADMIN_SECRET_CODE) {
+      setIsAdminAuthenticated(true);
+      setShowAdminLogin(false);
+      setAdminCode('');
+      goToAdmin();
+    } else {
+      alert('❌ Code administrateur incorrect');
+      setAdminCode('');
     }
   };
 
@@ -677,6 +734,84 @@ function App() {
     }
   };
 
+  const handleCreateReservation = async () => {
+    if (!reservationDate || !reservationTime) {
+      alert('❌ Veuillez sélectionner une date et une heure');
+      return;
+    }
+
+    if (!userData?.isPremium) {
+      alert('❌ Vous devez être membre Premium pour réserver une séance de conduite');
+      return;
+    }
+
+    setLoading(true);
+    
+    try {
+      const reservationId = `res_${Date.now()}`;
+      await setDoc(doc(db, 'reservations', reservationId), {
+        userId: currentUser.uid,
+        userName: `${userData.prenom} ${userData.nom}`,
+        userEmail: userData.email,
+        date: reservationDate,
+        time: reservationTime,
+        status: 'en attente',
+        createdAt: serverTimestamp()
+      });
+
+      alert('✅ Réservation créée avec succès ! En attente de confirmation.');
+      setShowReservationModal(false);
+      setReservationDate('');
+      setReservationTime('');
+      await loadUserReservations(currentUser.uid);
+      
+    } catch (error) {
+      console.error('Erreur création réservation:', error);
+      alert('❌ Erreur lors de la création de la réservation');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpdateReservationStatus = async (reservationId, newStatus) => {
+    setLoading(true);
+    
+    try {
+      await updateDoc(doc(db, 'reservations', reservationId), {
+        status: newStatus,
+        updatedAt: serverTimestamp()
+      });
+
+      alert(`✅ Réservation ${newStatus === 'confirmée' ? 'confirmée' : 'annulée'} !`);
+      await loadAllReservations();
+      
+    } catch (error) {
+      console.error('Erreur mise à jour réservation:', error);
+      alert('❌ Erreur lors de la mise à jour');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteReservation = async (reservationId) => {
+    if (!window.confirm('Êtes-vous sûr de vouloir supprimer cette réservation ?')) {
+      return;
+    }
+
+    setLoading(true);
+    
+    try {
+      await deleteDoc(doc(db, 'reservations', reservationId));
+      alert('✅ Réservation supprimée');
+      await loadUserReservations(currentUser.uid);
+    } catch (error) {
+      console.error('Erreur suppression réservation:', error);
+      alert('❌ Erreur lors de la suppression');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const startQuiz = (isPremium = false) => {
     if (isPremium && !userData?.isPremium) {
       alert('❌ Accès réservé aux membres Premium');
@@ -732,12 +867,14 @@ function App() {
   };
 
   const goToAdmin = async () => {
-    if (userData?.isMoniteur) {
-      await loadAllUsers();
-      setCurrentPage('admin');
-    } else {
-      alert('❌ Accès réservé aux moniteurs');
+    if (!isAdminAuthenticated) {
+      setShowAdminLogin(true);
+      return;
     }
+    
+    await loadAllUsers();
+    await loadAllReservations();
+    setCurrentPage('admin');
   };
 
   const goToPanneaux = () => {
@@ -758,6 +895,9 @@ function App() {
               <span className="logo-m">M</span>
               <span className="logo-text">ondiale</span>
             </div>
+            <button className="btn-admin-access" onClick={() => setShowAdminLogin(true)}>
+              🔐 Admin
+            </button>
           </div>
         </nav>
 
@@ -888,6 +1028,37 @@ function App() {
             </div>
           </div>
         </div>
+
+        {/* Modal de connexion Admin */}
+        {showAdminLogin && (
+          <div className="modal-overlay" onClick={() => setShowAdminLogin(false)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <h2>🔐 Accès Administrateur</h2>
+              <p>Entrez le code administrateur secret</p>
+              
+              <input
+                type="password"
+                placeholder="Code administrateur"
+                value={adminCode}
+                onChange={(e) => setAdminCode(e.target.value)}
+                className="auth-input"
+                onKeyPress={(e) => e.key === 'Enter' && handleAdminLogin()}
+              />
+              
+              <div className="modal-buttons">
+                <button onClick={handleAdminLogin} className="btn-confirm">
+                  Se connecter
+                </button>
+                <button onClick={() => {
+                  setShowAdminLogin(false);
+                  setAdminCode('');
+                }} className="btn-cancel">
+                  Annuler
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1039,7 +1210,7 @@ function App() {
     );
   }
 
-  // PAGE AUTH (reste identique - non modifiée pour la brièveté)
+  // PAGE AUTH
   if (currentPage === 'auth') {
     return (
       <div className="app">
@@ -1123,41 +1294,8 @@ function App() {
     );
   }
 
-  // PAGE HOME (reste similaire mais avec mise à jour du badge)
+  // PAGE HOME
   if (currentPage === 'home') {
-    if (userData?.isMoniteur) {
-      return (
-        <div className="app">
-          <nav className="dashboard-nav">
-            <div className="nav-container-dashboard">
-              <div className="logo-ornikar">
-                <span className="logo-m">M</span>
-                <span className="logo-text">ondiale</span>
-              </div>
-              <div className="nav-user">
-                <User size={18} />
-                <span className="user-name">{userData?.nom} {userData?.prenom}</span>
-                <button onClick={handleLogout} className="btn-logout-nav">
-                  <LogOut size={18} />
-                </button>
-              </div>
-            </div>
-          </nav>
-
-          <div className="dashboard-container">
-            <div className="moniteur-welcome">
-              <h1>👨‍🏫 Espace Moniteur</h1>
-              <p>Bienvenue dans votre tableau de bord administrateur</p>
-              <button className="btn-access-admin" onClick={goToAdmin}>
-                <Users size={24} />
-                Accéder au panneau d'administration
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
     return (
       <div className="app">
         <nav className="dashboard-nav">
@@ -1203,7 +1341,62 @@ function App() {
                 <div className="stat-label">Vues panneaux</div>
               </div>
             </div>
+            <div className="stat-card">
+              <Calendar size={30} />
+              <div className="stat-info">
+                <div className="stat-number">{reservations.length}</div>
+                <div className="stat-label">Réservations</div>
+              </div>
+            </div>
           </div>
+
+          {/* Réservations de l'élève */}
+          {userData?.isPremium && (
+            <div className="reservations-user-section">
+              <div className="section-header-with-btn">
+                <h3>🚗 Mes réservations de conduite</h3>
+                <button className="btn-add-reservation" onClick={() => setShowReservationModal(true)}>
+                  <Calendar size={18} />
+                  Nouvelle réservation
+                </button>
+              </div>
+              
+              {reservations.length > 0 ? (
+                <div className="reservations-list">
+                  {reservations.map((res) => (
+                    <div key={res.id} className="reservation-card">
+                      <div className="reservation-info">
+                        <div className="reservation-date">
+                          <Calendar size={20} />
+                          <span>{new Date(res.date).toLocaleDateString('fr-FR')}</span>
+                        </div>
+                        <div className="reservation-time">
+                          <Clock size={20} />
+                          <span>{res.time}</span>
+                        </div>
+                        <div className={`reservation-status status-${res.status}`}>
+                          {res.status === 'confirmée' && <CheckCircle size={18} />}
+                          {res.status === 'annulée' && <XCircle size={18} />}
+                          {res.status === 'en attente' && <Clock size={18} />}
+                          <span>{res.status}</span>
+                        </div>
+                      </div>
+                      {res.status === 'en attente' && (
+                        <button 
+                          className="btn-delete-reservation"
+                          onClick={() => handleDeleteReservation(res.id)}
+                        >
+                          Annuler
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="no-reservations">Aucune réservation pour le moment</p>
+              )}
+            </div>
+          )}
 
           {userData?.messages && userData.messages.length > 0 && (
             <div className="messages-container">
@@ -1285,6 +1478,7 @@ function App() {
           </div>
         </div>
 
+        {/* Modal de paiement */}
         {showPaymentModal && (
           <div className="modal-overlay" onClick={() => setShowPaymentModal(false)}>
             <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -1314,18 +1508,70 @@ function App() {
             </div>
           </div>
         )}
+
+        {/* Modal de réservation */}
+        {showReservationModal && (
+          <div className="modal-overlay" onClick={() => setShowReservationModal(false)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <h2>🚗 Réserver une séance de conduite</h2>
+              
+              <div className="form-group">
+                <label>Date</label>
+                <input
+                  type="date"
+                  value={reservationDate}
+                  onChange={(e) => setReservationDate(e.target.value)}
+                  className="auth-input"
+                  min={new Date().toISOString().split('T')[0]}
+                />
+              </div>
+              
+              <div className="form-group">
+                <label>Heure</label>
+                <select
+                  value={reservationTime}
+                  onChange={(e) => setReservationTime(e.target.value)}
+                  className="auth-input"
+                >
+                  <option value="">Sélectionner une heure</option>
+                  <option value="08:00">08:00</option>
+                  <option value="09:00">09:00</option>
+                  <option value="10:00">10:00</option>
+                  <option value="11:00">11:00</option>
+                  <option value="14:00">14:00</option>
+                  <option value="15:00">15:00</option>
+                  <option value="16:00">16:00</option>
+                  <option value="17:00">17:00</option>
+                </select>
+              </div>
+              
+              <div className="modal-buttons">
+                <button onClick={handleCreateReservation} disabled={loading} className="btn-confirm">
+                  {loading ? 'Création...' : 'Confirmer'}
+                </button>
+                <button onClick={() => {
+                  setShowReservationModal(false);
+                  setReservationDate('');
+                  setReservationTime('');
+                }} className="btn-cancel">
+                  Annuler
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
-  // PAGE ADMIN avec ACTIVITÉS
+  // PAGE ADMIN avec ACTIVITÉS ET RÉSERVATIONS
   if (currentPage === 'admin') {
-    if (!userData?.isMoniteur) {
+    if (!isAdminAuthenticated) {
       return (
         <div className="app">
           <div className="access-denied">
             <h1>❌ Accès refusé</h1>
-            <p>Cette page est réservée aux moniteurs</p>
+            <p>Vous devez vous authentifier en tant qu'administrateur</p>
             <button onClick={goHome} className="btn-back-home">Retour</button>
           </div>
         </div>
@@ -1341,7 +1587,7 @@ function App() {
               <span className="logo-text">ondiale</span>
             </div>
             <div className="nav-user">
-              <button onClick={goHome} className="btn-back-nav">
+              <button onClick={goToWelcome} className="btn-back-nav">
                 <ArrowLeft size={18} />
                 Retour
               </button>
@@ -1350,7 +1596,7 @@ function App() {
         </nav>
 
         <div className="admin-container">
-          <h1>👨‍🏫 Tableau de bord Moniteur</h1>
+          <h1>🔐 Tableau de bord Administrateur</h1>
           
           <div className="admin-stats">
             <div className="admin-stat-card">
@@ -1370,18 +1616,62 @@ function App() {
               </div>
             </div>
             <div className="admin-stat-card">
-              <h3>Vues Panneaux</h3>
-              <div className="admin-stat-number">
-                {allUsers.reduce((sum, u) => sum + (u.panneauxViewCount || 0), 0)}
-              </div>
+              <h3>Réservations</h3>
+              <div className="admin-stat-number">{allReservations.length}</div>
             </div>
           </div>
 
+          {/* Section Réservations */}
+          <div className="admin-reservations-section">
+            <h2>📅 Gestion des Réservations de Conduite</h2>
+            {allReservations.length > 0 ? (
+              <div className="reservations-admin-grid">
+                {allReservations.map((res) => (
+                  <div key={res.id} className="reservation-admin-card">
+                    <div className="reservation-admin-header">
+                      <strong>{res.userName}</strong>
+                      <span className={`reservation-status status-${res.status}`}>
+                        {res.status}
+                      </span>
+                    </div>
+                    <div className="reservation-admin-details">
+                      <p><Calendar size={16} /> {new Date(res.date).toLocaleDateString('fr-FR')}</p>
+                      <p><Clock size={16} /> {res.time}</p>
+                      <p>📧 {res.userEmail}</p>
+                    </div>
+                    {res.status === 'en attente' && (
+                      <div className="reservation-admin-actions">
+                        <button 
+                          className="btn-approve"
+                          onClick={() => handleUpdateReservationStatus(res.id, 'confirmée')}
+                        >
+                          <CheckCircle size={16} />
+                          Confirmer
+                        </button>
+                        <button 
+                          className="btn-reject"
+                          onClick={() => handleUpdateReservationStatus(res.id, 'annulée')}
+                        >
+                          <XCircle size={16} />
+                          Refuser
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="no-data-admin">Aucune réservation pour le moment</p>
+            )}
+          </div>
+
+          {/* Section Liste des élèves */}
           <div className="users-table-container">
-            <h2>Liste des élèves avec activités</h2>
+            <h2>👥 Liste des élèves avec activités</h2>
             <table className="users-table">
               <thead>
                 <tr>
+                  <th>Numéro</th>
                   <th>Nom</th>
                   <th>Prénom</th>
                   <th>Email</th>
@@ -1396,8 +1686,9 @@ function App() {
                 </tr>
               </thead>
               <tbody>
-                {allUsers.map(user => (
+                {allUsers.map((user, index) => (
                   <tr key={user.id}>
+                    <td><strong>#{index + 1}</strong></td>
                     <td>{user.nom}</td>
                     <td>{user.prenom}</td>
                     <td>{user.email}</td>
@@ -1435,7 +1726,7 @@ function App() {
                         <span className="badge-pending">En attente</span>
                       )}
                     </td>
-                    <td>{(user.totalPaid || 0).toLocaleString()} FCFA</td>
+                    <td><strong>{(user.totalPaid || 0).toLocaleString()} FCFA</strong></td>
                     <td>
                       <button 
                         className="btn-send-message"
@@ -1455,6 +1746,7 @@ function App() {
           </div>
         </div>
 
+        {/* Modal d'envoi de message */}
         {showMessageModal && (
           <div className="modal-overlay" onClick={() => setShowMessageModal(false)}>
             <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -1488,7 +1780,7 @@ function App() {
     );
   }
 
-  // PAGE QUIZ (identique, juste avec 50 questions pour premium)
+  // PAGE QUIZ
   if (currentPage === 'quiz') {
     const quizData = userData?.isPremium ? QUIZ_PREMIUM : QUIZ_GRATUITS;
     
